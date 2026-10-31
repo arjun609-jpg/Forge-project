@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoDebit Finder | Find every recurring payment</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <p id="boot" class="boot" role="status">Checking your session…</p>
+
+  <!-- ============ AUTH ============ -->
+  <div id="auth" class="auth" hidden>
+    <form id="af" class="card authcard" novalidate>
+      <h1>AutoDebit Finder</h1>
+      <p class="sub" id="aSub"></p>
+      <p id="aMsg" class="msg" role="alert" hidden></p>
+      <label id="nameW">Full name<input id="aName" autocomplete="name" maxlength="60"></label>
+      <label id="mailW">Email address<input id="aMail" type="email" autocomplete="email"></label>
+      <label id="passW">Password
+        <span class="pw"><input id="aPass" type="password"><button type="button" id="aShow" aria-label="Show or hide password">Show</button></span>
+      </label>
+      <label id="confW">Confirm password<input id="aConf" type="password" autocomplete="new-password"></label>
+      <button class="btn" id="aGo" type="submit"></button>
+      <p class="links">
+        <button type="button" class="lnk" id="aSwitch"></button>
+        <button type="button" class="lnk" id="aForgot">Forgot password?</button>
+      </p>
+    </form>
+  </div>
+
+  <!-- ============ APP ============ -->
+  <div id="app" hidden>
+    <header class="top">
+      <strong class="brand">AutoDebit Finder</strong>
+      <span class="grow"></span>
+      <span id="who" class="who"></span>
+      <button class="btn ghost" id="logout" type="button">Log out</button>
+    </header>
+
+    <main>
+      <section class="card" id="upload">
+        <h2>Upload a statement</h2>
+        <p class="hint">Use a synthetic CSV with columns: <code>date, description, amount</code> (optional <code>mode</code>, e.g. UPI AutoPay, Card, Bank e-mandate). It is analysed in your browser and never uploaded.</p>
+        <div class="row">
+          <input id="file" type="file" accept=".csv,text/csv" aria-label="Choose a CSV statement">
+          <button class="btn" id="sampleBtn" type="button">Load sample data</button>
+        </div>
+        <p id="upMsg" class="msg" role="status" hidden></p>
+      </section>
+
+      <div id="results" hidden>
+        <section id="stats" class="stats" aria-label="Overview"></section>
+
+        <section class="card">
+          <h2>Alerts and insights</h2>
+          <ul id="alerts" class="alerts"></ul>
+        </section>
+
+        <section class="card">
+          <h2>Recurring payments</h2>
+          <p class="hint">Dates and annual costs are estimates from your statement. Select Details for history and cancellation steps.</p>
+          <div class="tw">
+            <table id="tbl">
+              <thead><tr><th>Merchant</th><th>Amount</th><th>Frequency</th><th>Last paid</th><th>Next (est.)</th><th>Mechanism</th><th>Status</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="grid2">
+          <div class="card"><h2>Monthly recurring spend</h2><div id="chMonth"></div></div>
+          <div class="card"><h2>By merchant (annual est.)</h2><div id="chMerch"></div></div>
+          <div class="card"><h2>By category (annual est.)</h2><div id="chCat"></div></div>
+          <div class="card"><h2>By frequency (annual est.)</h2><div id="chFreq"></div></div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="foot">Prototype with synthetic data. Results are pattern-based estimates, not financial advice. This app guides you; it never cancels a payment for you.</footer>
+    <dialog id="dlg"></dialog>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js" defer></script>
+  <script src="script.js" defer></script>
+</body>
+</html>
