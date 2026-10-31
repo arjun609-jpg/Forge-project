@@ -280,39 +280,208 @@ function analyse(rows) {
 }
 
 /* ---------- CSV reading ---------- */
-function parseDate(s) {
-  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
-  if (m) return new Date(Date.UTC(+m[1], m[2] - 1, +m[3]));
-  m = /^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/.exec(s);
-  return m ? new Date(Date.UTC(+m[3], m[2] - 1, +m[1])) : null;
+
+/* ---------- Robust CSV parser and validation ---------- */
+
+function parseDate(value) {
+  const s = String(value || "").trim();
+
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+
+  if (m) {
+    const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    if (
+      d.getUTCFullYear() === +m[1] &&
+      d.getUTCMonth() === +m[2] - 1 &&
+      d.getUTCDate() === +m[3]
+    ) return d;
+    return null;
+  }
+
+  // Indian date format: DD/MM/YYYY
+  m = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(s);
+
+  if (m) {
+    const day = +m[1], month = +m[2], year = +m[3];
+    const d = new Date(Date.UTC(year, month - 1, day));
+
+    if (
+      d.getUTCFullYear() === year &&
+      d.getUTCMonth() === month - 1 &&
+      d.getUTCDate() === day
+    ) return d;
+  }
+
+  return null;
 }
 
-function toRows(text) {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim());
-  const cells = lines.map((line) => {
-    const c = []; let cur = "", q = false;
-    for (const ch of line) {
-      if (ch === '"') q = !q;
-      else if (ch === "," && !q) { c.push(cur.trim()); cur = ""; }
-      else cur += ch;
+
+// Handles quoted commas, escaped quotes and multiline cells.
+function parseCSV(text) {
+  const input = String(text || "").replace(/^\uFEFF/, "");
+  const firstLine = input.split(/\r?\n/)[0] || "";
+
+  function countDelimiter(line, delimiter) {
+    let quoted = false;
+    let count = 0;
+
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '"') {
+        if (quoted && line[i + 1] === '"') i++;
+        else quoted = !quoted;
+      } else if (line[i] === delimiter && !quoted) {
+        count++;
+      }
     }
-    c.push(cur.trim());
-    return c;
-  });
-  const hd = (cells[0] || []).map((x) => x.toLowerCase());
-  const find = (re) => hd.findIndex((x) => re.test(x));
-  const di = find(/date/), si = find(/desc|narr|particular|detail/);
-  let ai = find(/debit|withdraw/); if (ai < 0) ai = find(/amount/);
-  const mi = find(/mode|mechanism|channel/);
-  if (di < 0 || si < 0 || ai < 0) throw new Error("The CSV needs date, description and amount columns in its first row.");
+
+    return count;
+  }
+
+  const delimiter = [",", ";", "\t"]
+    .sort((a, b) =>
+      countDelimiter(firstLine, b) - countDelimiter(firstLine, a)
+    )[0];
+
   const rows = [];
-  cells.slice(1).forEach((c) => {
-    const d = parseDate(c[di] || ""), amt = parseFloat(String(c[ai] || "").replace(/[₹,\s]/g, ""));
-    if (d && amt > 0 && c[si]) rows.push({ d, desc: c[si], amt, mode: mi >= 0 ? c[mi] || "" : "" });
-  });
-  if (rows.length < 2) throw new Error("No usable rows found. Dates should look like 2026-03-14 or 14/03/2026.");
+  let row = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+
+    if (ch === '"') {
+      if (quoted && input[i + 1] === '"') {
+        cell += '"';
+        i++;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (ch === delimiter && !quoted) {
+      row.push(cell.trim());
+      cell = "";
+    } else if ((ch === "\n" || ch === "\r") && !quoted) {
+      if (ch === "\r" && input[i + 1] === "\n") i++;
+
+      row.push(cell.trim());
+
+      if (row.some(v => v !== "")) rows.push(row);
+
+      row = [];
+      cell = "";
+    } else {
+      cell += ch;
+    }
+  }
+
+  if (quoted) {
+    throw new Error("CSV has an unclosed quotation mark. Please check the file.");
+  }
+
+  row.push(cell.trim());
+  if (row.some(v => v !== "")) rows.push(row);
+
   return rows;
 }
+
+
+function toRows(text) {
+  const cells = parseCSV(text);
+
+  if (cells.length < 2) {
+    throw new Error("CSV file mein header ke baad koi transaction data nahi hai.");
+  }
+
+  const hd = cells[0].map(x =>
+    x.toLowerCase().replace(/^\uFEFF/, "").trim().replace(/[\s_-]+/g, "")
+  );
+
+  const find = re => hd.findIndex(x => re.test(x));
+
+  const di = find(/^(date|transactiondate|txndate|valuedate)$/);
+
+  const si = find(/description|narration|particular|details|merchant|remarks/);
+
+  let ai = find(/^(debit|withdrawal|withdrawals)$/);
+  if (ai < 0) ai = find(/^(amount|transactionamount|txnamount)$/);
+
+  const ci = find(/^(credit|deposit|deposits)$/);
+  const ti = find(/^(type|transactiontype|drcr)$/);
+  const mi = find(/mode|mechanism|channel|paymentmethod/);
+
+  if (di < 0 || si < 0 || (ai < 0 && ci < 0)) {
+    throw new Error(
+      "Required columns missing. CSV must contain date, description and amount/debit columns."
+    );
+  }
+
+  const rows = [];
+  let skipped = 0;
+  let total = 0;
+
+  for (const c of cells.slice(1)) {
+    if (!c.some(v => String(v).trim())) continue;
+
+    total++;
+
+    const date = parseDate(c[di]);
+    const description = String(c[si] || "").trim();
+
+    const type = ti >= 0
+      ? String(c[ti] || "").trim().toLowerCase()
+      : "";
+
+    // Do not count credits, refunds or deposits as spending.
+    if (/credit|deposit|refund|cr\b/.test(type)) {
+      skipped++;
+      continue;
+    }
+
+    let rawAmount = ai >= 0 ? c[ai] : "";
+
+    // If debit column is blank, do not mistake a credit for spending.
+    if (!String(rawAmount || "").trim() && ci >= 0) {
+      skipped++;
+      continue;
+    }
+
+    const amountText = String(rawAmount || "")
+      .replace(/[₹,\s]/g, "")
+      .replace(/^Rs\.?/i, "")
+      .replace(/[()]/g, "");
+
+    const amount = Number(amountText);
+
+    if (
+      !date ||
+      !description ||
+      !Number.isFinite(amount) ||
+      amount === 0
+    ) {
+      skipped++;
+      continue;
+    }
+
+    rows.push({
+      d: date,
+      desc: description,
+      amt: Math.abs(amount),
+      mode: mi >= 0 ? String(c[mi] || "").trim() : ""
+    });
+  }
+
+  if (rows.length === 0) {
+    throw new Error(
+      total === 0
+        ? "CSV mein transaction data nahi mila. File empty hai."
+        : "Koi valid transaction nahi mila. Date, description aur amount check karo. " +
+          skipped + " rows reject hui."
+    );
+  }
+
+  return { rows, skipped, total };
+}
+   
 
 /* ---------- Synthetic sample statement (fictional) ---------- */
 function sample() {
@@ -476,15 +645,59 @@ function detail(r) {
 /* ---------- Upload ---------- */
 function upMsg(t, ok) { const e = $("upMsg"); e.textContent = t; e.className = "msg" + (ok ? " ok" : ""); e.hidden = false; }
 
+
 function load(text) {
+  // Clear previous results first.
+  recs = [];
+  ref = null;
+
+  $("results").hidden = true;
+
+  $("stats").textContent = "";
+  $("alerts").textContent = "";
+  $("tbl").tBodies[0].textContent = "";
+
+  ["chMonth", "chMerch", "chCat", "chFreq"].forEach(id => {
+    $(id).textContent = "";
+  });
+
   try {
-    const rows = toRows(text);
+    const result = toRows(text);
+    const rows = result.rows;
+
+    // Analyse only the transactions actually read from the file.
     recs = analyse(rows);
-    $("results").hidden = false;
+
+    if (recs.length === 0) {
+      upMsg(
+        "File read successfully: " + rows.length +
+        " valid transactions. No recurring payment pattern was detected. " +
+        "No demo or fabricated results have been added." +
+        (result.skipped ? " Rejected rows: " + result.skipped + "." : ""),
+        false
+      );
+
+      return;
+    }
+
+    // Show dashboard only when real detected groups exist.
     render();
-    upMsg("Analysed " + rows.length + " transactions and found " + recs.length + " recurring payment groups.", true);
-  } catch (e) {
-    upMsg(e.message);
+    $("results").hidden = false;
+
+    upMsg(
+      "CSV scanned successfully. " +
+      rows.length + " valid transactions read. " +
+      recs.length + " recurring payment groups detected. " +
+      result.skipped + " invalid/credit rows skipped.",
+      true
+    );
+
+  } catch (error) {
+    recs = [];
+    ref = null;
+    $("results").hidden = true;
+
+    upMsg(error.message || "Could not analyse this CSV file.", false);
   }
 }
 
@@ -492,6 +705,10 @@ $("sampleBtn").onclick = () => load(sample());
 $("file").onchange = (e) => {
   const f = e.target.files[0];
   if (!f) return;
+  $("results").hidden = true;
+$("upMsg").hidden = true;
+recs = [];
+ref = null;
   if (f.size > 2e6) return upMsg("That file is too large (maximum 2 MB).");
   const r = new FileReader();
   r.onload = () => load(String(r.result));
